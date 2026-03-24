@@ -258,7 +258,7 @@ describe("stageBundledPluginRuntime", () => {
     expect(fs.readFileSync(runtimePackagePath, "utf8")).toContain('"extensions": [');
     expect(fs.lstatSync(runtimeManifestPath).isSymbolicLink()).toBe(false);
     expect(fs.readFileSync(runtimeManifestPath, "utf8")).toBe("{}\n");
-    expect(fs.lstatSync(runtimeAssetPath).isSymbolicLink()).toBe(true);
+    expect(fs.lstatSync(runtimeAssetPath).isSymbolicLink()).toBe(process.platform !== "win32");
     expect(fs.readFileSync(runtimeAssetPath, "utf8")).toBe("ok\n");
   });
 
@@ -389,9 +389,45 @@ describe("stageBundledPluginRuntime", () => {
       "feishu-doc",
       "SKILL.md",
     );
-    expect(fs.lstatSync(runtimeSkillPath).isSymbolicLink()).toBe(true);
+    expect(fs.lstatSync(runtimeSkillPath).isSymbolicLink()).toBe(process.platform !== "win32");
     expect(fs.readFileSync(runtimeSkillPath, "utf8")).toBe("# Feishu Doc\n");
 
     symlinkSpy.mockRestore();
+  });
+
+  it("falls back to file copy on Windows when runtime file symlink creation is denied", () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-win-eperm-");
+    const distPluginDir = path.join(repoRoot, "dist", "extensions", "acpx");
+    const distSkillDir = path.join(distPluginDir, "skills", "acp-router");
+    fs.mkdirSync(distSkillDir, { recursive: true });
+    fs.writeFileSync(path.join(distPluginDir, "index.js"), "export default {}\n", "utf8");
+    fs.writeFileSync(path.join(distSkillDir, "SKILL.md"), "# ACP Router\n", "utf8");
+
+    const realSymlinkSync = fs.symlinkSync.bind(fs);
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const symlinkSpy = vi.spyOn(fs, "symlinkSync").mockImplementation(((target, link, type) => {
+      const linkPath = String(link);
+      if (linkPath.endsWith(path.join("skills", "acp-router", "SKILL.md"))) {
+        throw Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+      }
+      return realSymlinkSync(String(target), linkPath, type);
+    }) as typeof fs.symlinkSync);
+
+    expect(() => stageBundledPluginRuntime({ repoRoot })).not.toThrow();
+
+    const runtimeSkillPath = path.join(
+      repoRoot,
+      "dist-runtime",
+      "extensions",
+      "acpx",
+      "skills",
+      "acp-router",
+      "SKILL.md",
+    );
+    expect(fs.lstatSync(runtimeSkillPath).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(runtimeSkillPath, "utf8")).toBe("# ACP Router\n");
+
+    symlinkSpy.mockRestore();
+    platformSpy.mockRestore();
   });
 });
